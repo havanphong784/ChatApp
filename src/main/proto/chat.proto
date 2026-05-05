@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package ChatProto;
+
+option java_multiple_files = true;
+option java_package = "ChatApp.proto";
+option java_outer_classname = "ChatMessageProto";
+
+message ChatMessage {
+  enum MessageType {
+    JOIN = 0;
+    LEAVE = 1;
+    MESSAGE = 2;
+    USER_LIST = 3;
+  }
+
+  MessageType type = 1;
+  string sender = 2;
+  string content = 3;
+  int64 timestamp = 4;
+  repeated string users = 5;
+}
+
+message ServerResponse {
+  bool success = 1;
+  string message = 2;
+}
+
