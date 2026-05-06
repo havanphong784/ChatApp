@@ -453,12 +453,17 @@ public class ChatAppController implements ChatClient.MessageListener {
         File file = chooser.showOpenDialog(btnImage.getScene().getWindow());
         if (file == null) return;
 
+        // Grab caption text from message field (if any)
+        String caption = txtMessage.getText().trim();
+        txtMessage.clear();
+
         try {
             byte[] data = Files.readAllBytes(file.toPath());
             String mime = Files.probeContentType(file.toPath());
             if (mime == null) mime = "application/octet-stream";
             String b64 = Base64.getEncoder().encodeToString(data);
-            String payload = "IMAGE::" + file.getName() + "::" + mime + "::" + b64;
+            // Format: IMAGE::filename::mime::caption::base64
+            String payload = "IMAGE::" + file.getName() + "::" + mime + "::" + caption + "::" + b64;
             chatClient.sendMessage(payload);
         } catch (IOException ex) {
             showAlert("Lỗi", "Không thể đọc file ảnh: " + ex.getMessage());
@@ -468,6 +473,7 @@ public class ChatAppController implements ChatClient.MessageListener {
     /**
      * Gửi ảnh mã hóa AES-256 với mật khẩu do người dùng nhập.
      * Người nhận phải nhập đúng mật khẩu mới xem được ảnh.
+     * Có thể thêm câu hỏi gợi ý để người nhận biết mật khẩu là gì.
      */
     private void sendEncryptedImage() {
         if (chatClient == null) return;
@@ -480,7 +486,7 @@ public class ChatAppController implements ChatClient.MessageListener {
         File file = chooser.showOpenDialog(btnEncryptedImage.getScene().getWindow());
         if (file == null) return;
 
-        // Prompt for password
+        // Step 1: Prompt for password
         TextInputDialog passwordDialog = new TextInputDialog();
         passwordDialog.setTitle("Mã hóa ảnh");
         passwordDialog.setHeaderText("Nhập mật khẩu để mã hóa ảnh");
@@ -492,6 +498,15 @@ public class ChatAppController implements ChatClient.MessageListener {
         }
         String password = passwordResult.get().trim();
 
+        // Step 2: Prompt for hint question (optional)
+        TextInputDialog hintDialog = new TextInputDialog();
+        hintDialog.setTitle("Câu hỏi gợi ý");
+        hintDialog.setHeaderText("Nhập câu hỏi gợi ý cho người nhận (tùy chọn)");
+        hintDialog.setContentText("Gợi ý:");
+        hintDialog.getEditor().setPromptText("VD: Tên con chó của tôi là gì?");
+        Optional<String> hintResult = hintDialog.showAndWait();
+        String hint = hintResult.isPresent() ? hintResult.get().trim() : "";
+
         try {
             byte[] rawData = Files.readAllBytes(file.toPath());
             String mime = Files.probeContentType(file.toPath());
@@ -501,8 +516,8 @@ public class ChatAppController implements ChatClient.MessageListener {
             byte[] encryptedData = ImageEncryptor.encrypt(rawData, password);
             String b64 = Base64.getEncoder().encodeToString(encryptedData);
 
-            // Payload format: ENCRYPTED_IMAGE::filename::mime::base64EncryptedData
-            String payload = "ENCRYPTED_IMAGE::" + file.getName() + "::" + mime + "::" + b64;
+            // Payload format: ENCRYPTED_IMAGE::filename::mime::hint::base64EncryptedData
+            String payload = "ENCRYPTED_IMAGE::" + file.getName() + "::" + mime + "::" + hint + "::" + b64;
             chatClient.sendMessage(payload);
         } catch (IOException ex) {
             showAlert("Lỗi", "Không thể đọc file ảnh: " + ex.getMessage());
@@ -817,11 +832,30 @@ public class ChatAppController implements ChatClient.MessageListener {
         String otherBg = "-fx-padding: 8px; -fx-background-color: #e8e8e8; -fx-border-radius: 5; -fx-background-radius: 5;";
 
         // Encrypted image message
+        // Format: ENCRYPTED_IMAGE::filename::mime::hint::base64 (5 parts)
+        // or legacy: ENCRYPTED_IMAGE::filename::mime::base64 (4 parts, no hint)
         if (message.getContent() != null && message.getContent().startsWith("ENCRYPTED_IMAGE::")) {
-            String[] parts = message.getContent().split("::", 4);
-            if (parts.length == 4) {
-                String encFilename = parts[1];
-                String encB64 = parts[3];
+            String[] parts = message.getContent().split("::", 5);
+            String encFilename;
+            String hint = "";
+            String encB64;
+
+            if (parts.length == 5) {
+                // New format with hint
+                encFilename = parts[1];
+                hint = parts[3];
+                encB64 = parts[4];
+            } else if (parts.length == 4) {
+                // Legacy format
+                encFilename = parts[1];
+                encB64 = parts[3];
+            } else {
+                encFilename = null;
+                encB64 = null;
+            }
+
+            if (encB64 != null) {
+                final String finalEncB64 = encB64;
 
                 VBox container = new VBox(5);
                 container.setAlignment(isOwn ? Pos.CENTER_RIGHT : Pos.CENTER_LEFT);
@@ -840,7 +874,6 @@ public class ChatAppController implements ChatClient.MessageListener {
                 lockedBox.setAlignment(Pos.CENTER);
                 lockedBox.setStyle("-fx-padding: 15; -fx-background-color: #2c2c2c; -fx-background-radius: 8; -fx-border-radius: 8; -fx-border-color: #ff6600; -fx-border-width: 2;");
                 lockedBox.setPrefWidth(300);
-                lockedBox.setPrefHeight(180);
 
                 Label lockIcon = new Label("🔒");
                 lockIcon.setStyle("-fx-font-size: 36;");
@@ -850,6 +883,16 @@ public class ChatAppController implements ChatClient.MessageListener {
 
                 Label fileLabel = new Label(encFilename);
                 fileLabel.setStyle("-fx-font-size: 11; -fx-text-fill: #cccccc;");
+
+                // Show hint question if present
+                lockedBox.getChildren().addAll(lockIcon, lockLabel, fileLabel);
+                if (!hint.isEmpty()) {
+                    Label hintLabel = new Label("💡 Gợi ý: " + hint);
+                    hintLabel.setStyle("-fx-font-size: 12; -fx-text-fill: #ffcc00; -fx-font-style: italic;");
+                    hintLabel.setWrapText(true);
+                    hintLabel.setMaxWidth(270);
+                    lockedBox.getChildren().add(hintLabel);
+                }
 
                 Button btnUnlock = new Button("🔓 Mở khóa xem ảnh");
                 btnUnlock.setStyle("-fx-padding: 8 16; -fx-font-size: 12; -fx-background-color: #ff6600; -fx-text-fill: white; -fx-background-radius: 5; -fx-cursor: hand;");
@@ -863,7 +906,7 @@ public class ChatAppController implements ChatClient.MessageListener {
                     if (pwResult.isEmpty() || pwResult.get().trim().isEmpty()) return;
 
                     try {
-                        byte[] encryptedBytes = Base64.getDecoder().decode(encB64);
+                        byte[] encryptedBytes = Base64.getDecoder().decode(finalEncB64);
                         byte[] decryptedBytes = ImageEncryptor.decrypt(encryptedBytes, pwResult.get().trim());
                         Image img = new Image(new ByteArrayInputStream(decryptedBytes));
                         if (img.isError()) {
@@ -886,7 +929,7 @@ public class ChatAppController implements ChatClient.MessageListener {
                     }
                 });
 
-                lockedBox.getChildren().addAll(lockIcon, lockLabel, fileLabel, btnUnlock);
+                lockedBox.getChildren().add(btnUnlock);
 
                 container.getChildren().addAll(messageRow, lockedBox);
                 textFlow.getChildren().add(container);
@@ -894,18 +937,34 @@ public class ChatAppController implements ChatClient.MessageListener {
             }
         }
 
-        // Image message
+        // Image message (with optional caption)
+        // Format: IMAGE::filename::mime::caption::base64 (5 parts)
+        // or legacy: IMAGE::filename::mime::base64 (4 parts, no caption)
         if (message.getContent() != null && message.getContent().startsWith("IMAGE::")) {
-            String[] parts = message.getContent().split("::", 4);
-            if (parts.length == 4) {
+            String[] parts = message.getContent().split("::", 5);
+            String caption = "";
+            String b64Data;
+
+            if (parts.length == 5) {
+                // New format with caption
+                caption = parts[3];
+                b64Data = parts[4];
+            } else if (parts.length == 4) {
+                // Legacy format without caption
+                b64Data = parts[3];
+            } else {
+                b64Data = null;
+            }
+
+            if (b64Data != null) {
                 try {
-                    byte[] imgBytes = Base64.getDecoder().decode(parts[3]);
+                    byte[] imgBytes = Base64.getDecoder().decode(b64Data);
                     Image img = new Image(new ByteArrayInputStream(imgBytes));
                     ImageView iv = new ImageView(img);
                     iv.setPreserveRatio(true);
                     iv.setFitWidth(300);
 
-                    VBox container = new VBox();
+                    VBox container = new VBox(3);
                     container.setAlignment(isOwn ? Pos.CENTER_RIGHT : Pos.CENTER_LEFT);
 
                     HBox messageRow = new HBox(5);
@@ -916,10 +975,19 @@ public class ChatAppController implements ChatClient.MessageListener {
                     timeText.setStyle("-fx-font-size: 10; -fx-fill: #999999;");
                     messageRow.getChildren().addAll(senderText, timeText);
 
-                    TextFlow contentFlow = new TextFlow(iv);
-                    contentFlow.setStyle(isOwn ? ownBg : otherBg);
+                    VBox contentBox = new VBox(4);
+                    contentBox.setStyle(isOwn ? ownBg : otherBg);
+                    contentBox.getChildren().add(iv);
 
-                    container.getChildren().addAll(messageRow, contentFlow);
+                    // Show caption if present
+                    if (!caption.isEmpty()) {
+                        Text captionText = new Text(caption);
+                        captionText.setWrappingWidth(290);
+                        captionText.setStyle(isOwn ? "-fx-fill: white; -fx-font-size: 13;" : "-fx-fill: black; -fx-font-size: 13;");
+                        contentBox.getChildren().add(captionText);
+                    }
+
+                    container.getChildren().addAll(messageRow, contentBox);
                     textFlow.getChildren().add(container);
                     return textFlow;
                 } catch (IllegalArgumentException ex) {

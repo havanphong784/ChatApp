@@ -35,6 +35,20 @@ public class ChatServer {
     }
 
     /**
+     * Broadcast the current user list to ALL connected clients.
+     * Called when a user joins or leaves.
+     */
+    public void broadcastUserList() {
+        List<String> users = getConnectedUsers();
+        ChatMessage userListMsg = ChatMessage.newBuilder()
+                .setType(ChatMessage.MessageType.USER_LIST)
+                .addAllUsers(users)
+                .setTimestamp(System.currentTimeMillis())
+                .build();
+        broadcastMessage(userListMsg);
+    }
+
+    /**
      * Send a message to a specific user by username.
      * Used for video call signaling (request, accept, reject, end).
      */
