@@ -20,8 +20,11 @@ import javafx.scene.text.TextFlow;
 import javafx.stage.FileChooser;
 
 import java.io.ByteArrayInputStream;
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Optional;
 
@@ -69,6 +72,12 @@ public class ChatAppController implements ChatClient.MessageListener {
     private Button btnVoice;
 
     @FXML
+    private Button btnSpeechToText;
+
+    @FXML
+    private Button btnStopSpeech;
+
+    @FXML
     private Button btnVideoCall;
 
     @FXML
@@ -105,6 +114,9 @@ public class ChatAppController implements ChatClient.MessageListener {
     private final SimpleDateFormat timeFormat = new SimpleDateFormat("HH:mm:ss");
     private VoiceHandler voiceHandler;
     private boolean isRecording = false;
+    private boolean sttRunning = false;
+    private Process sttProcess;
+    private boolean sttCancelled = false;
     private javafx.stage.Popup iconPopup;
     private final List<String> recentIcons = new ArrayList<>();
 
@@ -165,7 +177,15 @@ public class ChatAppController implements ChatClient.MessageListener {
         btnIcon.setOnAction(e -> showIconPicker());
         btnEncryptedImage.setOnAction(e -> sendEncryptedImage());
         btnFile.setOnAction(e -> sendFile());
-        btnVideoCall.setOnAction(e -> initiateVideoCall());
+        if (btnVideoCall != null) {
+            btnVideoCall.setOnAction(e -> initiateVideoCall());
+        }
+        if (btnSpeechToText != null) {
+            btnSpeechToText.setOnAction(e -> speechToText());
+        }
+        if (btnStopSpeech != null) {
+            btnStopSpeech.setOnAction(e -> stopSpeechToText());
+        }
         voiceHandler = new VoiceHandler();
         btnVoice.setOnAction(e -> {
             if (!isRecording) {
@@ -216,6 +236,131 @@ public class ChatAppController implements ChatClient.MessageListener {
 
         chatPanel.setVisible(false);
         connectPanel.setVisible(true);
+    }
+
+    private void speechToText() {
+        if (sttRunning) return;
+
+        sttRunning = true;
+        sttCancelled = false;
+        btnSpeechToText.setDisable(true);
+        if (btnStopSpeech != null) {
+            btnStopSpeech.setDisable(false);
+        }
+        setChatStatus("🎙️ Đang nghe...", Color.ORANGE);
+
+        new Thread(() -> {
+            try {
+                String recognized = recognizeFromMicrophone(30);
+                if (!sttCancelled) {
+                    Platform.runLater(() -> {
+                        if (recognized == null || recognized.isBlank()) {
+                            showAlert("Speech to Text", "Không nhận diện được giọng nói. Hãy thử nói rõ hơn.");
+                        } else {
+                            int caret = Math.max(0, txtMessage.getCaretPosition());
+                            String prefix = txtMessage.getText().isBlank() ? "" : " ";
+                            txtMessage.insertText(caret, prefix + recognized.trim());
+                            txtMessage.requestFocus();
+                            txtMessage.positionCaret(caret + prefix.length() + recognized.trim().length());
+                        }
+                    });
+                }
+            } catch (Exception ex) {
+                if (!sttCancelled) {
+                    Platform.runLater(() -> showAlert("Speech to Text", "Không thể chuyển giọng nói thành văn bản: " + ex.getMessage()));
+                }
+            } finally {
+                Platform.runLater(() -> {
+                    sttRunning = false;
+                    sttCancelled = false;
+                    btnSpeechToText.setDisable(false);
+                    if (btnStopSpeech != null) {
+                        btnStopSpeech.setDisable(true);
+                    }
+                    setChatStatus("✅ Kết nối thành công", Color.GREEN);
+                });
+            }
+        }, "Speech-To-Text-Thread").start();
+    }
+
+    private void stopSpeechToText() {
+        if (!sttRunning) return;
+        sttCancelled = true;
+        if (sttProcess != null) {
+            try {
+                sttProcess.destroy();
+            } catch (Exception ignored) {}
+        }
+    }
+
+    private String recognizeFromMicrophone(int timeoutSeconds) throws IOException, InterruptedException {
+        if (!isWindows()) {
+            throw new IOException("Tính năng hiện chỉ hỗ trợ Windows.");
+        }
+
+        String script = "$ErrorActionPreference='Stop';"
+                + "Add-Type -AssemblyName System.Speech;"
+                + "$culture=[System.Globalization.CultureInfo]::InstalledUICulture;"
+                + "$rec=New-Object System.Speech.Recognition.SpeechRecognitionEngine($culture);"
+                + "$rec.LoadGrammar((New-Object System.Speech.Recognition.DictationGrammar));"
+                + "$rec.SetInputToDefaultAudioDevice();"
+                + "$r=$rec.Recognize([TimeSpan]::FromSeconds(" + timeoutSeconds + "));"
+                + "if($r -ne $null){$r.Text}";
+
+        return runPowerShell(script);
+    }
+
+    private void speakText(String text) throws IOException, InterruptedException {
+        if (!isWindows()) {
+            throw new IOException("Tính năng hiện chỉ hỗ trợ Windows.");
+        }
+
+        String escaped = text.replace("'", "''");
+        String script = "$ErrorActionPreference='Stop';"
+                + "Add-Type -AssemblyName System.Speech;"
+                + "$synth=New-Object System.Speech.Synthesis.SpeechSynthesizer;"
+                + "$synth.Speak('" + escaped + "');";
+
+        runPowerShell(script);
+    }
+
+    private String runPowerShell(String script) throws IOException, InterruptedException {
+        ProcessBuilder pb = new ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script);
+        Process process = pb.start();
+        sttProcess = process;
+
+        StringBuilder output = new StringBuilder();
+        StringBuilder error = new StringBuilder();
+
+        try (BufferedReader outReader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
+             BufferedReader errReader = new BufferedReader(new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = outReader.readLine()) != null) {
+                if (!line.isBlank()) {
+                    if (!output.isEmpty()) output.append(' ');
+                    output.append(line.trim());
+                }
+            }
+
+            while ((line = errReader.readLine()) != null) {
+                if (!line.isBlank()) {
+                    if (!error.isEmpty()) error.append(' ');
+                    error.append(line.trim());
+                }
+            }
+        }
+
+        int code = process.waitFor();
+        sttProcess = null;
+        if (code != 0) {
+            throw new IOException(error.isEmpty() ? "PowerShell execution failed." : error.toString());
+        }
+
+        return output.toString();
+    }
+
+    private boolean isWindows() {
+        return System.getProperty("os.name", "").toLowerCase().contains("win");
     }
 
     private void showIconPicker() {
@@ -1143,10 +1288,29 @@ public class ChatAppController implements ChatClient.MessageListener {
         Text contentText = new Text(message.getContent());
         contentText.setWrappingWidth(300);
         contentText.setStyle(isOwn ? "-fx-padding: 5px; -fx-fill: white;" : "-fx-padding: 5px; -fx-fill: black;");
+        
+        HBox contentBox = new HBox(6);
+        contentBox.setAlignment(Pos.CENTER_LEFT);
         TextFlow contentFlow = new TextFlow(contentText);
         contentFlow.setStyle(isOwn ? ownBg : otherBg);
-
-        container.getChildren().addAll(messageRow, contentFlow);
+        contentFlow.setPrefWidth(280);
+        
+        Button readBtn = new Button("🔊");
+        readBtn.setStyle("-fx-font-size: 12; -fx-min-width: 32; -fx-min-height: 32; -fx-background-radius: 6;");
+        readBtn.setOnAction(e -> {
+            String text = message.getContent();
+            if (text == null || text.isBlank()) return;
+            new Thread(() -> {
+                try {
+                    speakText(text);
+                } catch (Exception ex) {
+                    Platform.runLater(() -> showAlert("Text to Speech", "Không thể đọc văn bản: " + ex.getMessage()));
+                }
+            }, "TTS-Message-" + System.currentTimeMillis()).start();
+        });
+        
+        contentBox.getChildren().addAll(contentFlow, readBtn);
+        container.getChildren().addAll(messageRow, contentBox);
         textFlow.getChildren().add(container);
         return textFlow;
     }
