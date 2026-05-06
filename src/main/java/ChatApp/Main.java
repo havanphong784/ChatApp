@@ -9,7 +9,7 @@ import java.util.Objects;
 
 public class Main extends Application {
     static void main(String[] args) {
-        System.out.println("🚀 App bắt đầu chạy...\n");
+        System.out.println("App bắt đầu chạy...\n");
         Application.launch(args);
     }
 

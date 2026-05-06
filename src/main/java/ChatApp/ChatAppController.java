@@ -3,9 +3,10 @@ package ChatApp;
 import ChatApp.proto.ChatMessage;
 import javafx.application.Platform;
 import javafx.fxml.FXML;
-import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.*;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
@@ -13,18 +14,16 @@ import javafx.scene.paint.Color;
 import javafx.scene.text.Text;
 import javafx.scene.text.TextFlow;
 import javafx.stage.FileChooser;
-import javafx.scene.image.Image;
-import javafx.scene.image.ImageView;
 
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
-import java.util.Base64;
-
 import java.text.SimpleDateFormat;
+import java.util.Base64;
 import java.util.Date;
 import java.util.List;
+import javax.sound.sampled.LineUnavailableException;
 
 public class ChatAppController implements ChatClient.MessageListener {
     @FXML
@@ -47,12 +46,18 @@ public class ChatAppController implements ChatClient.MessageListener {
 
     @FXML
     private Button btnImage;
-    
+
     @FXML
     private Button btnFile;
 
     @FXML
-    private Label lblStatus;
+    private Button btnVoice;
+
+    @FXML
+    private Label lblConnectStatus;
+
+    @FXML
+    private Label lblChatStatus;
 
     @FXML
     private VBox userListContainer;
@@ -79,7 +84,9 @@ public class ChatAppController implements ChatClient.MessageListener {
     private BorderPane chatPanel;
 
     private ChatClient chatClient;
-    private SimpleDateFormat timeFormat = new SimpleDateFormat("HH:mm:ss");
+    private final SimpleDateFormat timeFormat = new SimpleDateFormat("HH:mm:ss");
+    private VoiceHandler voiceHandler;
+    private boolean isRecording = false;
 
     @FXML
     public void initialize() {
@@ -94,6 +101,48 @@ public class ChatAppController implements ChatClient.MessageListener {
         btnSend.setOnAction(e -> sendMessage());
         btnImage.setOnAction(e -> sendImage());
         btnFile.setOnAction(e -> sendFile());
+        voiceHandler = new VoiceHandler();
+        btnVoice.setOnAction(e -> {
+            if (!isRecording) {
+                try {
+                    voiceHandler.startRecording();
+                    isRecording = true;
+                    btnVoice.setText("⏹️");
+                    btnSend.setDisable(true);
+                    btnImage.setDisable(true);
+                    btnFile.setDisable(true);
+                    txtMessage.setDisable(true);
+                    setChatStatus("● Đang thu âm...", Color.ORANGE);
+                } catch (LineUnavailableException ex) {
+                    showAlert("Lỗi", "Không thể bắt đầu thu âm: " + ex.getMessage());
+                }
+            } else {
+                // stop and send
+                new Thread(() -> {
+                    try {
+                        byte[] wav = voiceHandler.stopRecording();
+                        if (wav != null && wav.length > 0) {
+                            String b64 = Base64.getEncoder().encodeToString(wav);
+                            String filename = "voice_" + System.currentTimeMillis() + ".wav";
+                            String payload = "VOICE::" + filename + "::audio/wav::" + b64;
+                            chatClient.sendMessage(payload);
+                        }
+                    } catch (IOException ex) {
+                        Platform.runLater(() -> showAlert("Lỗi", "Không thể dừng thu âm: " + ex.getMessage()));
+                    } finally {
+                        Platform.runLater(() -> {
+                            isRecording = false;
+                            btnVoice.setText("🎤");
+                            btnSend.setDisable(false);
+                            btnImage.setDisable(false);
+                            btnFile.setDisable(false);
+                            txtMessage.setDisable(false);
+                            setChatStatus("✅ Kết nối thành công", Color.GREEN);
+                        });
+                    }
+                }).start();
+            }
+        });
         txtMessage.setOnKeyPressed(e -> {
             if (e.getCode().toString().equals("ENTER")) {
                 sendMessage();
@@ -129,15 +178,14 @@ public class ChatAppController implements ChatClient.MessageListener {
                         lblClient.setText("👤 " + username);
                         connectPanel.setVisible(false);
                         chatPanel.setVisible(true);
-                        lblStatus.setText("✅ Kết nối thành công");
-                        lblStatus.setTextFill(Color.GREEN);
+                        setConnectStatus("✅ Kết nối thành công", Color.GREEN);
+                        setChatStatus("✅ Kết nối thành công", Color.GREEN);
                     });
                 }
             } catch (IOException ex) {
                 Platform.runLater(() -> {
                     showAlert("Lỗi", "Không thể kết nối đến server: " + ex.getMessage());
-                    lblStatus.setText("❌ Kết nối thất bại");
-                    lblStatus.setTextFill(Color.RED);
+                    setConnectStatus("❌ Kết nối thất bại", Color.RED);
                 });
             }
         }).start();
@@ -162,7 +210,6 @@ public class ChatAppController implements ChatClient.MessageListener {
         File file = chooser.showOpenDialog(btnImage.getScene().getWindow());
         if (file == null) return;
 
-        // Read file and send as base64-embedded content to avoid changing proto
         try {
             byte[] data = Files.readAllBytes(file.toPath());
             String mime = Files.probeContentType(file.toPath());
@@ -268,7 +315,6 @@ public class ChatAppController implements ChatClient.MessageListener {
             String[] parts = message.getContent().split("::", 4);
             if (parts.length == 4) {
                 String filename = parts[1];
-                String mime = parts[2];
                 String b64 = parts[3];
 
                 VBox containerFile = new VBox();
@@ -312,6 +358,56 @@ public class ChatAppController implements ChatClient.MessageListener {
         }
 
         // Plain text message
+        // Voice message
+        if (message.getContent() != null && message.getContent().startsWith("VOICE::")) {
+            String[] parts = message.getContent().split("::", 4);
+            if (parts.length == 4) {
+                String filename = parts[1];
+                String b64 = parts[3];
+
+                VBox containerVoice = new VBox();
+                containerVoice.setAlignment(isOwn ? Pos.CENTER_RIGHT : Pos.CENTER_LEFT);
+
+                HBox messageRowVoice = new HBox(8);
+                messageRowVoice.setAlignment(isOwn ? Pos.CENTER_RIGHT : Pos.CENTER_LEFT);
+                Text senderTextVoice = new Text(message.getSender());
+                senderTextVoice.setStyle(isOwn ? "-fx-font-weight: bold; -fx-fill: #0066cc;" : "-fx-font-weight: bold; -fx-fill: #00aa00;");
+                Text timeTextVoice = new Text(" [" + timeFormat.format(new Date(message.getTimestamp())) + "]");
+                timeTextVoice.setStyle("-fx-font-size: 10; -fx-fill: #999999;");
+                messageRowVoice.getChildren().addAll(senderTextVoice, timeTextVoice);
+
+                HBox voiceBox = new HBox(6);
+                voiceBox.setAlignment(isOwn ? Pos.CENTER_RIGHT : Pos.CENTER_LEFT);
+                Label lbl = new Label(filename);
+                lbl.setStyle("-fx-border-color: #cccccc; -fx-padding: 6; -fx-background-radius: 4; -fx-border-radius: 4;");
+                Button btnPlay = new Button("▶ Phát");
+                btnPlay.setOnAction(e -> {
+                    byte[] audioBytes;
+                    try {
+                        audioBytes = Base64.getDecoder().decode(b64);
+                    } catch (IllegalArgumentException ex) {
+                        showAlert("Lỗi", "Dữ liệu âm thanh không hợp lệ");
+                        return;
+                    }
+                    // play in background thread
+                    new Thread(() -> {
+                        try {
+                            voiceHandler.play(audioBytes);
+                        } catch (Exception ex) {
+                            Platform.runLater(() -> showAlert("Lỗi", "Không thể phát âm thanh: " + ex.getMessage()));
+                        }
+                    }, "Voice-Play-Thread").start();
+                });
+
+                voiceBox.getChildren().addAll(lbl, btnPlay);
+                TextFlow contentFlow = new TextFlow(voiceBox);
+                contentFlow.setStyle(isOwn ? ownBg : otherBg);
+
+                containerVoice.getChildren().addAll(messageRowVoice, contentFlow);
+                textFlow.getChildren().add(containerVoice);
+                return textFlow;
+            }
+        }
         VBox container = new VBox();
         container.setAlignment(isOwn ? Pos.CENTER_RIGHT : Pos.CENTER_LEFT);
 
@@ -348,8 +444,24 @@ public class ChatAppController implements ChatClient.MessageListener {
                 showAlert("Thông báo", "Bạn đã bị ngắt kết nối");
                 connectPanel.setVisible(true);
                 chatPanel.setVisible(false);
+                setConnectStatus("❌ Đã ngắt kết nối", Color.RED);
+                setChatStatus("❌ Mất kết nối", Color.RED);
             }
         });
+    }
+
+    private void setConnectStatus(String text, Color color) {
+        if (lblConnectStatus != null) {
+            lblConnectStatus.setText(text);
+            lblConnectStatus.setTextFill(color);
+        }
+    }
+
+    private void setChatStatus(String text, Color color) {
+        if (lblChatStatus != null) {
+            lblChatStatus.setText(text);
+            lblChatStatus.setTextFill(color);
+        }
     }
 
     private void showAlert(String title, String message) {

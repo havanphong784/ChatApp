@@ -2,14 +2,18 @@ package Server;
 
 import ChatApp.proto.ChatMessage;
 import com.google.protobuf.ByteString;
-import java.io.*;
+
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.EOFException;
+import java.io.IOException;
 import java.net.Socket;
 import java.util.List;
 
 public class ClientHandler extends Thread {
-    private Socket socket;
+    private final Socket socket;
     private String username;
-    private ChatServer server;
+    private final ChatServer server;
     private DataInputStream input;
     private DataOutputStream output;
 
@@ -24,7 +28,6 @@ public class ClientHandler extends Thread {
             input = new DataInputStream(socket.getInputStream());
             output = new DataOutputStream(socket.getOutputStream());
 
-            // Receive first message containing username
             int messageSize = input.readInt();
             byte[] messageBuffer = new byte[messageSize];
             input.readFully(messageBuffer);
@@ -34,7 +37,6 @@ public class ClientHandler extends Thread {
                 this.username = firstMessage.getSender();
                 server.addClient(username, this);
 
-                // Notify all clients about the new user
                 ChatMessage joinNotification = ChatMessage.newBuilder()
                         .setType(ChatMessage.MessageType.MESSAGE)
                         .setSender("System")
@@ -43,10 +45,8 @@ public class ClientHandler extends Thread {
                         .build();
                 server.broadcastMessage(joinNotification);
 
-                // Send user list to new user
                 sendUserList();
 
-                // Listen for messages
                 while (true) {
                     try {
                         messageSize = input.readInt();
