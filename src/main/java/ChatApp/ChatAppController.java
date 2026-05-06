@@ -9,8 +9,10 @@ import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
+import javafx.scene.shape.Rectangle;
 import javafx.scene.text.Text;
 import javafx.scene.text.TextFlow;
 import javafx.stage.FileChooser;
@@ -19,6 +21,8 @@ import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.util.Optional;
+
 import java.text.SimpleDateFormat;
 import java.util.Base64;
 import java.util.Date;
@@ -47,6 +51,9 @@ public class ChatAppController implements ChatClient.MessageListener {
     @FXML
     private Button btnImage;
 
+    @FXML
+    private Button btnEncryptedImage;
+    
     @FXML
     private Button btnFile;
 
@@ -100,6 +107,7 @@ public class ChatAppController implements ChatClient.MessageListener {
         btnConnect.setOnAction(e -> connectToServer());
         btnSend.setOnAction(e -> sendMessage());
         btnImage.setOnAction(e -> sendImage());
+        btnEncryptedImage.setOnAction(e -> sendEncryptedImage());
         btnFile.setOnAction(e -> sendFile());
         voiceHandler = new VoiceHandler();
         btnVoice.setOnAction(e -> {
@@ -222,6 +230,52 @@ public class ChatAppController implements ChatClient.MessageListener {
         }
     }
 
+    /**
+     * Gửi ảnh mã hóa AES-256 với mật khẩu do người dùng nhập.
+     * Người nhận phải nhập đúng mật khẩu mới xem được ảnh.
+     */
+    private void sendEncryptedImage() {
+        if (chatClient == null) return;
+
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle("Chọn ảnh mã hóa để gửi");
+        chooser.getExtensionFilters().addAll(
+                new FileChooser.ExtensionFilter("Image Files", "*.png", "*.jpg", "*.jpeg", "*.gif", "*.bmp")
+        );
+        File file = chooser.showOpenDialog(btnEncryptedImage.getScene().getWindow());
+        if (file == null) return;
+
+        // Prompt for password
+        TextInputDialog passwordDialog = new TextInputDialog();
+        passwordDialog.setTitle("Mã hóa ảnh");
+        passwordDialog.setHeaderText("Nhập mật khẩu để mã hóa ảnh");
+        passwordDialog.setContentText("Mật khẩu:");
+        Optional<String> passwordResult = passwordDialog.showAndWait();
+        if (passwordResult.isEmpty() || passwordResult.get().trim().isEmpty()) {
+            showAlert("Thông báo", "Bạn chưa nhập mật khẩu. Hủy gửi ảnh mã hóa.");
+            return;
+        }
+        String password = passwordResult.get().trim();
+
+        try {
+            byte[] rawData = Files.readAllBytes(file.toPath());
+            String mime = Files.probeContentType(file.toPath());
+            if (mime == null) mime = "application/octet-stream";
+
+            // Encrypt image bytes with AES-256
+            byte[] encryptedData = ImageEncryptor.encrypt(rawData, password);
+            String b64 = Base64.getEncoder().encodeToString(encryptedData);
+
+            // Payload format: ENCRYPTED_IMAGE::filename::mime::base64EncryptedData
+            String payload = "ENCRYPTED_IMAGE::" + file.getName() + "::" + mime + "::" + b64;
+            chatClient.sendMessage(payload);
+        } catch (IOException ex) {
+            showAlert("Lỗi", "Không thể đọc file ảnh: " + ex.getMessage());
+        } catch (Exception ex) {
+            showAlert("Lỗi", "Mã hóa ảnh thất bại: " + ex.getMessage());
+        }
+    }
+
     private void sendFile() {
         if (chatClient == null) return;
 
@@ -275,6 +329,84 @@ public class ChatAppController implements ChatClient.MessageListener {
         boolean isOwn = message.getSender().equals(chatClient.getUsername());
         String ownBg = "-fx-padding: 8px; -fx-background-color: #0066cc; -fx-border-radius: 5; -fx-background-radius: 5;";
         String otherBg = "-fx-padding: 8px; -fx-background-color: #e8e8e8; -fx-border-radius: 5; -fx-background-radius: 5;";
+
+        // Encrypted image message
+        if (message.getContent() != null && message.getContent().startsWith("ENCRYPTED_IMAGE::")) {
+            String[] parts = message.getContent().split("::", 4);
+            if (parts.length == 4) {
+                String encFilename = parts[1];
+                String encB64 = parts[3];
+
+                VBox container = new VBox(5);
+                container.setAlignment(isOwn ? Pos.CENTER_RIGHT : Pos.CENTER_LEFT);
+
+                // Sender + time row
+                HBox messageRow = new HBox(5);
+                messageRow.setAlignment(isOwn ? Pos.CENTER_RIGHT : Pos.CENTER_LEFT);
+                Text senderText = new Text(message.getSender());
+                senderText.setStyle(isOwn ? "-fx-font-weight: bold; -fx-fill: #0066cc;" : "-fx-font-weight: bold; -fx-fill: #00aa00;");
+                Text timeText = new Text(" [" + timeFormat.format(new Date(message.getTimestamp())) + "]");
+                timeText.setStyle("-fx-font-size: 10; -fx-fill: #999999;");
+                messageRow.getChildren().addAll(senderText, timeText);
+
+                // Locked image placeholder
+                VBox lockedBox = new VBox(8);
+                lockedBox.setAlignment(Pos.CENTER);
+                lockedBox.setStyle("-fx-padding: 15; -fx-background-color: #2c2c2c; -fx-background-radius: 8; -fx-border-radius: 8; -fx-border-color: #ff6600; -fx-border-width: 2;");
+                lockedBox.setPrefWidth(300);
+                lockedBox.setPrefHeight(180);
+
+                Label lockIcon = new Label("🔒");
+                lockIcon.setStyle("-fx-font-size: 36;");
+
+                Label lockLabel = new Label("Ảnh mã hóa");
+                lockLabel.setStyle("-fx-font-size: 14; -fx-font-weight: bold; -fx-text-fill: #ff9933;");
+
+                Label fileLabel = new Label(encFilename);
+                fileLabel.setStyle("-fx-font-size: 11; -fx-text-fill: #cccccc;");
+
+                Button btnUnlock = new Button("🔓 Mở khóa xem ảnh");
+                btnUnlock.setStyle("-fx-padding: 8 16; -fx-font-size: 12; -fx-background-color: #ff6600; -fx-text-fill: white; -fx-background-radius: 5; -fx-cursor: hand;");
+
+                btnUnlock.setOnAction(e -> {
+                    TextInputDialog pwDialog = new TextInputDialog();
+                    pwDialog.setTitle("Giải mã ảnh");
+                    pwDialog.setHeaderText("Nhập mật khẩu để xem ảnh");
+                    pwDialog.setContentText("Mật khẩu:");
+                    Optional<String> pwResult = pwDialog.showAndWait();
+                    if (pwResult.isEmpty() || pwResult.get().trim().isEmpty()) return;
+
+                    try {
+                        byte[] encryptedBytes = Base64.getDecoder().decode(encB64);
+                        byte[] decryptedBytes = ImageEncryptor.decrypt(encryptedBytes, pwResult.get().trim());
+                        Image img = new Image(new ByteArrayInputStream(decryptedBytes));
+                        if (img.isError()) {
+                            showAlert("Sai mật khẩu", "Mật khẩu không đúng hoặc dữ liệu bị hỏng!");
+                            return;
+                        }
+                        ImageView iv = new ImageView(img);
+                        iv.setPreserveRatio(true);
+                        iv.setFitWidth(300);
+
+                        // Replace locked box with the decrypted image
+                        lockedBox.getChildren().clear();
+                        lockedBox.setStyle("-fx-padding: 5; -fx-background-color: transparent; -fx-border-color: transparent;");
+                        lockedBox.setPrefHeight(-1);
+                        Label unlockedLabel = new Label("🔓 Đã giải mã");
+                        unlockedLabel.setStyle("-fx-font-size: 10; -fx-text-fill: #00cc00;");
+                        lockedBox.getChildren().addAll(iv, unlockedLabel);
+                    } catch (Exception ex) {
+                        showAlert("Sai mật khẩu", "Mật khẩu không đúng hoặc dữ liệu bị hỏng!\n" + ex.getMessage());
+                    }
+                });
+
+                lockedBox.getChildren().addAll(lockIcon, lockLabel, fileLabel, btnUnlock);
+
+                container.getChildren().addAll(messageRow, lockedBox);
+                textFlow.getChildren().add(container);
+                return textFlow;
+            }
+        }
 
         // Image message
         if (message.getContent() != null && message.getContent().startsWith("IMAGE::")) {
