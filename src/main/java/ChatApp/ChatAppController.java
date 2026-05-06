@@ -4,6 +4,7 @@ import ChatApp.proto.ChatMessage;
 import javafx.application.Platform;
 import javafx.fxml.FXML;
 import javafx.geometry.Pos;
+import javafx.scene.Node;
 import javafx.scene.control.*;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
@@ -11,6 +12,7 @@ import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
+import javafx.scene.layout.FlowPane;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.Rectangle;
 import javafx.scene.text.Text;
@@ -24,9 +26,12 @@ import java.nio.file.Files;
 import java.util.Optional;
 
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import javax.sound.sampled.LineUnavailableException;
 
 public class ChatAppController implements ChatClient.MessageListener {
@@ -50,6 +55,9 @@ public class ChatAppController implements ChatClient.MessageListener {
 
     @FXML
     private Button btnImage;
+
+    @FXML
+    private Button btnIcon;
 
     @FXML
     private Button btnEncryptedImage;
@@ -97,6 +105,44 @@ public class ChatAppController implements ChatClient.MessageListener {
     private final SimpleDateFormat timeFormat = new SimpleDateFormat("HH:mm:ss");
     private VoiceHandler voiceHandler;
     private boolean isRecording = false;
+    private javafx.stage.Popup iconPopup;
+    private final List<String> recentIcons = new ArrayList<>();
+
+    private record EmojiIcon(String emoji, String keywords) {}
+
+    private static final Map<String, List<EmojiIcon>> ICON_CATEGORIES = new LinkedHashMap<>();
+
+    static {
+        ICON_CATEGORIES.put("😀", List.of(
+                icon("😀", "smile happy"), icon("😄", "smile"), icon("😁", "grin"), icon("😂", "laugh"),
+                icon("🤣", "lol"), icon("😊", "blush"), icon("😍", "love"), icon("🥰", "heart eyes"),
+                icon("😘", "kiss"), icon("😎", "cool"), icon("🤩", "star"), icon("🥳", "party")
+        ));
+        ICON_CATEGORIES.put("👍", List.of(
+                icon("👍", "like ok"), icon("👏", "clap"), icon("🙏", "thanks"), icon("🤝", "handshake"),
+                icon("💪", "strong"), icon("👌", "perfect"), icon("✌️", "victory"), icon("🙌", "raise hands"),
+                icon("🤞", "hope"), icon("🫶", "heart hands")
+        ));
+        ICON_CATEGORIES.put("❤️", List.of(
+                icon("❤️", "heart love"), icon("💙", "blue heart"), icon("💚", "green heart"), icon("💛", "yellow heart"),
+                icon("🧡", "orange heart"), icon("💜", "purple heart"), icon("🩷", "pink heart"), icon("💔", "broken heart"),
+                icon("💕", "two hearts"), icon("💯", "hundred")
+        ));
+        ICON_CATEGORIES.put("🎉", List.of(
+                icon("🎉", "party"), icon("🎊", "celebrate"), icon("🔥", "fire"), icon("⭐", "star"),
+                icon("✨", "sparkles"), icon("🎈", "balloon"), icon("🥂", "cheers"), icon("🏆", "trophy"),
+                icon("🎵", "music"), icon("🎮", "game")
+        ));
+        ICON_CATEGORIES.put("🐶", List.of(
+                icon("🐶", "dog"), icon("🐱", "cat"), icon("🐼", "panda"), icon("🦊", "fox"),
+                icon("🐻", "bear"), icon("🐯", "tiger"), icon("🐵", "monkey"), icon("🐸", "frog"),
+                icon("🦄", "unicorn"), icon("🐧", "penguin")
+        ));
+    }
+
+    private static EmojiIcon icon(String emoji, String keywords) {
+        return new EmojiIcon(emoji, keywords);
+    }
 
     // ═══════ VIDEO CALL FIELDS ═══════
     private VideoCallManager videoCallManager;
@@ -116,6 +162,7 @@ public class ChatAppController implements ChatClient.MessageListener {
         btnConnect.setOnAction(e -> connectToServer());
         btnSend.setOnAction(e -> sendMessage());
         btnImage.setOnAction(e -> sendImage());
+        btnIcon.setOnAction(e -> showIconPicker());
         btnEncryptedImage.setOnAction(e -> sendEncryptedImage());
         btnFile.setOnAction(e -> sendFile());
         btnVideoCall.setOnAction(e -> initiateVideoCall());
@@ -169,6 +216,184 @@ public class ChatAppController implements ChatClient.MessageListener {
 
         chatPanel.setVisible(false);
         connectPanel.setVisible(true);
+    }
+
+    private void showIconPicker() {
+        if (iconPopup != null && iconPopup.isShowing()) {
+            iconPopup.hide();
+            return;
+        }
+
+        VBox root = new VBox(10);
+        root.setStyle("-fx-padding: 12; -fx-background-color: white; -fx-border-color: #dcdfe5; -fx-border-radius: 12; -fx-background-radius: 12;");
+        root.setPrefWidth(320);
+
+        Label title = new Label("Emoji");
+        title.setStyle("-fx-font-size: 13; -fx-font-weight: bold; -fx-text-fill: #3a3d44;");
+
+        TextField searchField = new TextField();
+        searchField.setPromptText("Tìm emoji...");
+        searchField.setStyle("-fx-background-radius: 10; -fx-padding: 8 10;");
+
+        HBox recentRow = new HBox(6);
+        recentRow.setAlignment(Pos.CENTER_LEFT);
+        recentRow.setStyle("-fx-padding: 2 0 2 0;");
+        Label recentLabel = new Label("Gần đây:");
+        recentLabel.setStyle("-fx-font-size: 11; -fx-text-fill: #7a7f89;");
+        recentRow.getChildren().add(recentLabel);
+        updateRecentRow(recentRow);
+
+        ToggleGroup categoryGroup = new ToggleGroup();
+        HBox categoryTabs = new HBox(6);
+        categoryTabs.setAlignment(Pos.CENTER_LEFT);
+
+        FlowPane iconGrid = new FlowPane();
+        iconGrid.setHgap(8);
+        iconGrid.setVgap(8);
+        iconGrid.setPrefWrapLength(288);
+
+        ScrollPane gridScroll = new ScrollPane(iconGrid);
+        gridScroll.setFitToWidth(true);
+        gridScroll.setPrefViewportHeight(230);
+        gridScroll.setStyle("-fx-background-color: transparent;");
+
+        for (String cat : ICON_CATEGORIES.keySet()) {
+            ToggleButton tab = new ToggleButton(cat);
+            tab.setToggleGroup(categoryGroup);
+            tab.setStyle("-fx-background-radius: 16; -fx-background-color: #f1f3f7; -fx-font-size: 14;");
+            tab.setPrefWidth(44);
+            categoryTabs.getChildren().add(tab);
+        }
+
+        categoryGroup.selectedToggleProperty().addListener((obs, oldToggle, newToggle) -> {
+            if (newToggle instanceof ToggleButton selected) {
+                renderIconGrid(iconGrid, ICON_CATEGORIES.get(selected.getText()), searchField.getText(), recentRow);
+            }
+        });
+
+        searchField.textProperty().addListener((obs, oldText, newText) -> {
+            Toggle selected = categoryGroup.getSelectedToggle();
+            if (selected instanceof ToggleButton selectedBtn) {
+                renderIconGrid(iconGrid, ICON_CATEGORIES.get(selectedBtn.getText()), newText, recentRow);
+            }
+        });
+
+        root.getChildren().addAll(title, searchField, recentRow, categoryTabs, gridScroll);
+
+        iconPopup = new javafx.stage.Popup();
+        iconPopup.getContent().add(root);
+        iconPopup.setAutoHide(true);
+
+        Toggle first = categoryGroup.getToggles().isEmpty() ? null : categoryGroup.getToggles().get(0);
+        if (first != null) {
+            categoryGroup.selectToggle(first);
+        }
+
+        if (btnIcon.getScene() != null) {
+            javafx.geometry.Bounds bounds = btnIcon.localToScreen(btnIcon.getBoundsInLocal());
+            double x = Math.max(8, bounds.getMinX() - 250);
+            double y = bounds.getMinY() - 320;
+            iconPopup.show(btnIcon.getScene().getWindow(), x, y);
+        }
+    }
+
+    private void renderIconGrid(FlowPane grid, List<EmojiIcon> icons, String keyword, HBox recentRow) {
+        grid.getChildren().clear();
+        if (icons == null) return;
+
+        String filter = keyword == null ? "" : keyword.trim().toLowerCase();
+        for (EmojiIcon icon : icons) {
+            if (!filter.isEmpty() && !icon.keywords().contains(filter) && !icon.emoji().contains(filter)) {
+                continue;
+            }
+
+            Button emojiButton = new Button();
+            emojiButton.setGraphic(createEmojiImageView(icon.emoji(), 24));
+            emojiButton.setStyle("-fx-font-size: 20; -fx-min-width: 44; -fx-min-height: 44; -fx-background-radius: 22; -fx-background-color: #f4f6fa;");
+            emojiButton.setOnMouseEntered(e -> {
+                emojiButton.setScaleX(1.08);
+                emojiButton.setScaleY(1.08);
+                emojiButton.setStyle("-fx-font-size: 20; -fx-min-width: 44; -fx-min-height: 44; -fx-background-radius: 22; -fx-background-color: #e8ecf7;");
+            });
+            emojiButton.setOnMouseExited(e -> {
+                emojiButton.setScaleX(1.0);
+                emojiButton.setScaleY(1.0);
+                emojiButton.setStyle("-fx-font-size: 20; -fx-min-width: 44; -fx-min-height: 44; -fx-background-radius: 22; -fx-background-color: #f4f6fa;");
+            });
+
+            emojiButton.setOnAction(e -> {
+                if (chatClient != null) {
+                    chatClient.sendMessage("ICON::" + icon.emoji());
+                }
+                rememberRecent(icon.emoji());
+                updateRecentRow(recentRow);
+                iconPopup.hide();
+            });
+
+            grid.getChildren().add(emojiButton);
+        }
+    }
+
+    private void insertEmojiAtCaret(String emoji) {
+        int caret = Math.max(0, txtMessage.getCaretPosition());
+        txtMessage.insertText(caret, emoji);
+        txtMessage.requestFocus();
+        txtMessage.positionCaret(caret + emoji.length());
+    }
+
+    private void rememberRecent(String emoji) {
+        recentIcons.remove(emoji);
+        recentIcons.add(0, emoji);
+        if (recentIcons.size() > 8) {
+            recentIcons.remove(recentIcons.size() - 1);
+        }
+    }
+
+    private void updateRecentRow(HBox recentRow) {
+        while (recentRow.getChildren().size() > 1) {
+            recentRow.getChildren().remove(1);
+        }
+
+        if (recentIcons.isEmpty()) {
+            Label empty = new Label("chưa có");
+            empty.setStyle("-fx-font-size: 11; -fx-text-fill: #a1a5ad;");
+            recentRow.getChildren().add(empty);
+            return;
+        }
+
+        for (String recent : recentIcons) {
+            Button quick = new Button();
+            quick.setGraphic(createEmojiImageView(recent, 18));
+            quick.setStyle("-fx-min-width: 30; -fx-min-height: 30; -fx-background-radius: 15; -fx-background-color: #f4f6fa;");
+            quick.setOnAction(e -> {
+                if (chatClient != null) {
+                    chatClient.sendMessage("ICON::" + recent);
+                }
+                iconPopup.hide();
+            });
+            recentRow.getChildren().add(quick);
+        }
+    }
+
+    private ImageView createEmojiImageView(String emoji, double size) {
+        String imageUrl = toTwemojiUrl(emoji);
+        Image image = new Image(imageUrl, size, size, true, true, true);
+        ImageView imageView = new ImageView(image);
+        imageView.setFitWidth(size);
+        imageView.setFitHeight(size);
+        return imageView;
+    }
+
+    private String toTwemojiUrl(String emoji) {
+        StringBuilder hex = new StringBuilder();
+        int[] cps = emoji.codePoints().toArray();
+        for (int i = 0; i < cps.length; i++) {
+            if (i > 0) {
+                hex.append("-");
+            }
+            hex.append(Integer.toHexString(cps[i]));
+        }
+        return "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/" + hex + ".png";
     }
 
     @FXML
@@ -700,6 +925,41 @@ public class ChatAppController implements ChatClient.MessageListener {
                 } catch (IllegalArgumentException ex) {
                     // fall through to show as broken text
                 }
+            }
+        }
+
+        // Icon message
+        if (message.getContent() != null && message.getContent().startsWith("ICON::")) {
+            String[] parts = message.getContent().split("::", 2);
+            if (parts.length == 2) {
+                String emoji = parts[1];
+
+                VBox container = new VBox();
+                container.setAlignment(isOwn ? Pos.CENTER_RIGHT : Pos.CENTER_LEFT);
+
+                HBox messageRow = new HBox(5);
+                messageRow.setAlignment(isOwn ? Pos.CENTER_RIGHT : Pos.CENTER_LEFT);
+                Text senderText = new Text(message.getSender());
+                senderText.setStyle(isOwn ? "-fx-font-weight: bold; -fx-fill: #0066cc;" : "-fx-font-weight: bold; -fx-fill: #00aa00;");
+                Text timeText = new Text(" [" + timeFormat.format(new Date(message.getTimestamp())) + "]");
+                timeText.setStyle("-fx-font-size: 10; -fx-fill: #999999;");
+                messageRow.getChildren().addAll(senderText, timeText);
+
+                Node emojiNode;
+                try {
+                    emojiNode = createEmojiImageView(emoji, 40);
+                } catch (Exception ex) {
+                    Label fallback = new Label(emoji);
+                    fallback.setStyle("-fx-font-size: 36;");
+                    emojiNode = fallback;
+                }
+
+                TextFlow contentFlow = new TextFlow(emojiNode);
+                contentFlow.setStyle(isOwn ? ownBg : otherBg);
+
+                container.getChildren().addAll(messageRow, contentFlow);
+                textFlow.getChildren().add(container);
+                return textFlow;
             }
         }
 
