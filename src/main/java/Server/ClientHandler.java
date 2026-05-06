@@ -58,13 +58,34 @@ public class ClientHandler extends Thread {
                         if (message.getType() == ChatMessage.MessageType.LEAVE) {
                             break;
                         } else if (message.getType() == ChatMessage.MessageType.MESSAGE) {
-                            ChatMessage broadcastMsg = ChatMessage.newBuilder()
-                                    .setType(ChatMessage.MessageType.MESSAGE)
-                                    .setSender(message.getSender())
-                                    .setContent(message.getContent())
-                                    .setTimestamp(System.currentTimeMillis())
-                                    .build();
-                            server.broadcastMessage(broadcastMsg);
+                            String content = message.getContent();
+
+                            // Video call signaling: relay to target user only
+                            if (content != null && content.startsWith("VCALL_")) {
+                                // Format: VCALL_<TYPE>::targetUser[::extra_data]
+                                String[] vcParts = content.split("::", 3);
+                                if (vcParts.length >= 2) {
+                                    String targetUser = vcParts[1];
+                                    ChatMessage relayMsg = ChatMessage.newBuilder()
+                                            .setType(ChatMessage.MessageType.MESSAGE)
+                                            .setSender(message.getSender())
+                                            .setContent(content)
+                                            .setTimestamp(System.currentTimeMillis())
+                                            .build();
+                                    server.sendToUser(targetUser, relayMsg);
+                                    // Also send back to caller for confirmation
+                                    server.sendToUser(message.getSender(), relayMsg);
+                                }
+                            } else {
+                                // Normal message: broadcast to all
+                                ChatMessage broadcastMsg = ChatMessage.newBuilder()
+                                        .setType(ChatMessage.MessageType.MESSAGE)
+                                        .setSender(message.getSender())
+                                        .setContent(message.getContent())
+                                        .setTimestamp(System.currentTimeMillis())
+                                        .build();
+                                server.broadcastMessage(broadcastMsg);
+                            }
                         }
                     } catch (EOFException e) {
                         break;
@@ -97,6 +118,13 @@ public class ClientHandler extends Thread {
                 .setTimestamp(System.currentTimeMillis())
                 .build();
         sendMessage(userListMsg);
+    }
+
+    /**
+     * Get the IP address of this client's socket connection.
+     */
+    public String getClientAddress() {
+        return socket.getInetAddress().getHostAddress();
     }
 
     private void cleanup() {
