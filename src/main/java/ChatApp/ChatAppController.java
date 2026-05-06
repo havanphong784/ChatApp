@@ -61,6 +61,9 @@ public class ChatAppController implements ChatClient.MessageListener {
     private Button btnVoice;
 
     @FXML
+    private Button btnVideoCall;
+
+    @FXML
     private Label lblConnectStatus;
 
     @FXML
@@ -95,6 +98,12 @@ public class ChatAppController implements ChatClient.MessageListener {
     private VoiceHandler voiceHandler;
     private boolean isRecording = false;
 
+    // ═══════ VIDEO CALL FIELDS ═══════
+    private VideoCallManager videoCallManager;
+    private VideoCallWindow videoCallWindow;
+    private String currentCallPeer = null;  // username of the person we're in a call with
+    private boolean inVideoCall = false;
+
     @FXML
     public void initialize() {
         chatClient = new ChatClient();
@@ -109,6 +118,7 @@ public class ChatAppController implements ChatClient.MessageListener {
         btnImage.setOnAction(e -> sendImage());
         btnEncryptedImage.setOnAction(e -> sendEncryptedImage());
         btnFile.setOnAction(e -> sendFile());
+        btnVideoCall.setOnAction(e -> initiateVideoCall());
         voiceHandler = new VoiceHandler();
         btnVoice.setOnAction(e -> {
             if (!isRecording) {
@@ -307,10 +317,261 @@ public class ChatAppController implements ChatClient.MessageListener {
     @Override
     public void onMessageReceived(ChatMessage message) {
         Platform.runLater(() -> {
+            String content = message.getContent();
+
+            // ═══════ VIDEO CALL SIGNALING ═══════
+            if (content != null && content.startsWith("VCALL_")) {
+                handleVideoCallSignal(message);
+                return; // Don't show in chat area
+            }
+
             TextFlow messageBox = createMessageBox(message);
             chatArea.getChildren().add(messageBox);
             scrollPane.setVvalue(1.0);
         });
+    }
+
+    // ═══════════════════════════════════════════════════════
+    //                   VIDEO CALL LOGIC
+    // ═══════════════════════════════════════════════════════
+
+    /**
+     * User clicks the 📹 button → select a user from the list → send call request.
+     */
+    private void initiateVideoCall() {
+        if (inVideoCall) {
+            showAlert("Thông báo", "Bạn đang trong cuộc gọi video. Hãy kết thúc trước khi gọi mới.");
+            return;
+        }
+
+        String selectedUser = userListView.getSelectionModel().getSelectedItem();
+        if (selectedUser == null || selectedUser.isEmpty()) {
+            showAlert("Thông báo", "Vui lòng chọn một người dùng từ danh sách để gọi video.");
+            return;
+        }
+
+        if (selectedUser.equals(chatClient.getUsername())) {
+            showAlert("Thông báo", "Bạn không thể gọi video cho chính mình!");
+            return;
+        }
+
+        // Send VCALL_REQUEST to the target user
+        String payload = "VCALL_REQUEST::" + selectedUser;
+        chatClient.sendMessage(payload);
+        currentCallPeer = selectedUser;
+        setChatStatus("📹 Đang gọi " + selectedUser + "...", Color.ORANGE);
+    }
+
+    /**
+     * Handle all incoming video call signaling messages.
+     */
+    private void handleVideoCallSignal(ChatMessage message) {
+        String content = message.getContent();
+        String sender = message.getSender();
+
+        // Ignore our own echo messages
+        if (sender.equals(chatClient.getUsername())) return;
+
+        if (content.startsWith("VCALL_REQUEST::")) {
+            // Someone is calling us
+            handleIncomingCall(sender);
+
+        } else if (content.startsWith("VCALL_ACCEPT::")) {
+            // Our call was accepted; extract remote IP and port
+            // Format: VCALL_ACCEPT::targetUser::ip::port
+            String[] parts = content.split("::", 4);
+            if (parts.length == 4) {
+                String remoteIp = parts[2];
+                int remotePort = Integer.parseInt(parts[3]);
+                handleCallAccepted(sender, remoteIp, remotePort);
+            }
+
+        } else if (content.startsWith("VCALL_REJECT::")) {
+            // Our call was rejected
+            showAlert("Cuộc gọi bị từ chối", sender + " đã từ chối cuộc gọi video.");
+            currentCallPeer = null;
+            setChatStatus("✅ Kết nối thành công", Color.GREEN);
+
+        } else if (content.startsWith("VCALL_END::")) {
+            // Remote party ended the call
+            endVideoCall(false);
+            showAlert("Kết thúc cuộc gọi", sender + " đã kết thúc cuộc gọi video.");
+
+        } else if (content.startsWith("VCALL_READY::")) {
+            // Caller got our accept and sends back their UDP info
+            // Format: VCALL_READY::targetUser::ip::port
+            String[] parts = content.split("::", 4);
+            if (parts.length == 4) {
+                String remoteIp = parts[2];
+                int remotePort = Integer.parseInt(parts[3]);
+                startVideoStream(sender, remoteIp, remotePort);
+            }
+        }
+    }
+
+    /**
+     * Show an incoming call dialog to the user.
+     */
+    private void handleIncomingCall(String caller) {
+        if (inVideoCall) {
+            // Already in a call, auto-reject
+            String payload = "VCALL_REJECT::" + caller;
+            chatClient.sendMessage(payload);
+            return;
+        }
+
+        Alert callAlert = new Alert(Alert.AlertType.CONFIRMATION);
+        callAlert.setTitle("📹 Cuộc gọi video đến");
+        callAlert.setHeaderText(caller + " đang gọi video cho bạn!");
+        callAlert.setContentText("Bạn có muốn trả lời không?");
+
+        ButtonType btnAccept = new ButtonType("✅ Trả lời", ButtonBar.ButtonData.YES);
+        ButtonType btnReject = new ButtonType("❌ Từ chối", ButtonBar.ButtonData.NO);
+        callAlert.getButtonTypes().setAll(btnAccept, btnReject);
+
+        Optional<ButtonType> result = callAlert.showAndWait();
+
+        if (result.isPresent() && result.get() == btnAccept) {
+            // Accept the call: prepare our UDP receiver and send back our info
+            int myPort = VideoCallManager.findAvailablePort();
+            String myIp = VideoCallManager.getLocalIp();
+            currentCallPeer = caller;
+
+            // Send VCALL_ACCEPT with our UDP endpoint so caller can connect to us
+            String payload = "VCALL_ACCEPT::" + caller + "::" + myIp + "::" + myPort;
+            chatClient.sendMessage(payload);
+
+            // We wait for VCALL_READY from caller with their UDP endpoint before starting stream
+            setChatStatus("📹 Đang kết nối với " + caller + "...", Color.ORANGE);
+
+            // Prepare the video call manager (will start streaming when we receive VCALL_READY)
+            videoCallManager = new VideoCallManager();
+
+            // Create the video call window
+            videoCallWindow = new VideoCallWindow(chatClient.getUsername(), caller);
+            videoCallWindow.setWindowListener(() -> endVideoCall(true));
+            videoCallWindow.setStatus("● Đang chờ kết nối...", Color.YELLOW);
+            videoCallWindow.show();
+
+            inVideoCall = true;
+
+            // Store the local port for when VCALL_READY arrives
+            videoCallManager.setListener(new VideoCallManager.VideoFrameListener() {
+                @Override public void onLocalFrame(Image frame) {
+                    Platform.runLater(() -> { if (videoCallWindow != null) videoCallWindow.updateLocalFrame(frame); });
+                }
+                @Override public void onRemoteFrame(Image frame) {
+                    Platform.runLater(() -> { if (videoCallWindow != null) videoCallWindow.updateRemoteFrame(frame); });
+                }
+                @Override public void onCallError(String error) {
+                    Platform.runLater(() -> showAlert("Lỗi Video", error));
+                }
+                @Override public void onCallEnded() {
+                    Platform.runLater(() -> endVideoCall(false));
+                }
+            });
+
+            // Store myPort in a temporary field to use when VCALL_READY arrives
+            pendingLocalPort = myPort;
+
+        } else {
+            // Reject
+            String payload = "VCALL_REJECT::" + caller;
+            chatClient.sendMessage(payload);
+        }
+    }
+
+    private int pendingLocalPort = -1;
+
+    /**
+     * Called on the CALLER side when the callee accepts.
+     * The caller now knows the callee's UDP endpoint and can start streaming.
+     */
+    private void handleCallAccepted(String callee, String calleeIp, int calleePort) {
+        int myPort = VideoCallManager.findAvailablePort();
+        String myIp = VideoCallManager.getLocalIp();
+
+        // Send VCALL_READY so the callee knows our UDP endpoint
+        String payload = "VCALL_READY::" + callee + "::" + myIp + "::" + myPort;
+        chatClient.sendMessage(payload);
+
+        // Start video call
+        videoCallManager = new VideoCallManager();
+        videoCallWindow = new VideoCallWindow(chatClient.getUsername(), callee);
+        videoCallWindow.setWindowListener(() -> endVideoCall(true));
+        videoCallWindow.show();
+
+        inVideoCall = true;
+
+        videoCallManager.setListener(new VideoCallManager.VideoFrameListener() {
+            @Override public void onLocalFrame(Image frame) {
+                Platform.runLater(() -> { if (videoCallWindow != null) videoCallWindow.updateLocalFrame(frame); });
+            }
+            @Override public void onRemoteFrame(Image frame) {
+                Platform.runLater(() -> { if (videoCallWindow != null) videoCallWindow.updateRemoteFrame(frame); });
+            }
+            @Override public void onCallError(String error) {
+                Platform.runLater(() -> showAlert("Lỗi Video", error));
+            }
+            @Override public void onCallEnded() {
+                Platform.runLater(() -> endVideoCall(false));
+            }
+        });
+
+        try {
+            videoCallManager.start(calleeIp, calleePort, myPort);
+            videoCallWindow.setStatus("● Đang gọi video", Color.LIMEGREEN);
+            setChatStatus("📹 Đang gọi video với " + callee, Color.LIMEGREEN);
+        } catch (Exception ex) {
+            showAlert("Lỗi Video Call", "Không thể bắt đầu video call: " + ex.getMessage());
+            endVideoCall(true);
+        }
+    }
+
+    /**
+     * Called on the CALLEE side when VCALL_READY arrives with the caller's UDP endpoint.
+     */
+    private void startVideoStream(String caller, String callerIp, int callerPort) {
+        if (videoCallManager == null || pendingLocalPort < 0) return;
+
+        try {
+            videoCallManager.start(callerIp, callerPort, pendingLocalPort);
+            if (videoCallWindow != null) {
+                videoCallWindow.setStatus("● Đang gọi video", Color.LIMEGREEN);
+            }
+            setChatStatus("📹 Đang gọi video với " + caller, Color.LIMEGREEN);
+            pendingLocalPort = -1;
+        } catch (Exception ex) {
+            showAlert("Lỗi Video Call", "Không thể bắt đầu video call: " + ex.getMessage());
+            endVideoCall(true);
+        }
+    }
+
+    /**
+     * End the video call.
+     *
+     * @param notifyRemote true to send VCALL_END to the other party
+     */
+    private void endVideoCall(boolean notifyRemote) {
+        if (notifyRemote && currentCallPeer != null) {
+            String payload = "VCALL_END::" + currentCallPeer;
+            chatClient.sendMessage(payload);
+        }
+
+        if (videoCallManager != null) {
+            videoCallManager.stop();
+            videoCallManager = null;
+        }
+
+        if (videoCallWindow != null) {
+            videoCallWindow.close();
+            videoCallWindow = null;
+        }
+
+        currentCallPeer = null;
+        inVideoCall = false;
+        pendingLocalPort = -1;
+        setChatStatus("✅ Kết nối thành công", Color.GREEN);
     }
 
     private TextFlow createMessageBox(ChatMessage message) {

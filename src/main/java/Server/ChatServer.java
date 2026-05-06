@@ -34,5 +34,27 @@ public class ChatServer {
         return new ArrayList<>(clients.keySet());
     }
 
+    /**
+     * Send a message to a specific user by username.
+     * Used for video call signaling (request, accept, reject, end).
+     */
+    public void sendToUser(String username, ChatMessage message) {
+        ClientHandler handler = clients.get(username);
+        if (handler != null) {
+            handler.sendMessage(message);
+        }
+    }
+
+    /**
+     * Get the IP address of a connected client.
+     */
+    public String getClientAddress(String username) {
+        ClientHandler handler = clients.get(username);
+        if (handler != null) {
+            return handler.getClientAddress();
+        }
+        return null;
+    }
+
 }
 
