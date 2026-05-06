@@ -45,7 +45,8 @@ public class ClientHandler extends Thread {
                         .build();
                 server.broadcastMessage(joinNotification);
 
-                sendUserList();
+                // Broadcast updated user list to ALL clients
+                server.broadcastUserList();
 
                 while (true) {
                     try {
@@ -110,16 +111,6 @@ public class ClientHandler extends Thread {
         }
     }
 
-    private void sendUserList() {
-        List<String> users = server.getConnectedUsers();
-        ChatMessage userListMsg = ChatMessage.newBuilder()
-                .setType(ChatMessage.MessageType.USER_LIST)
-                .addAllUsers(users)
-                .setTimestamp(System.currentTimeMillis())
-                .build();
-        sendMessage(userListMsg);
-    }
-
     /**
      * Get the IP address of this client's socket connection.
      */
@@ -131,6 +122,7 @@ public class ClientHandler extends Thread {
         try {
             if (username != null) {
                 server.removeClient(username);
+
                 ChatMessage leaveMsg = ChatMessage.newBuilder()
                         .setType(ChatMessage.MessageType.MESSAGE)
                         .setSender("System")
@@ -138,6 +130,9 @@ public class ClientHandler extends Thread {
                         .setTimestamp(System.currentTimeMillis())
                         .build();
                 server.broadcastMessage(leaveMsg);
+
+                // Broadcast updated user list to ALL remaining clients
+                server.broadcastUserList();
             }
             socket.close();
         } catch (IOException e) {

@@ -8,7 +8,7 @@ import java.util.concurrent.CountDownLatch;
 
 /**
  * Utility class to record and play simple WAV audio using the system microphone.
- * Designed to be small and self-contained so it can be merged separately.
+ * Audio recorded at 44.1kHz for higher quality and louder playback.
  */
 public class VoiceHandler {
     private TargetDataLine line;
@@ -18,8 +18,8 @@ public class VoiceHandler {
     private Thread captureThread;
 
     public VoiceHandler() {
-        // 16 kHz, 16 bits, mono, signed, little-endian - reasonable for voice
-        this.format = new AudioFormat(16000f, 16, 1, true, false);
+        // 44.1 kHz, 16 bits, mono, signed, little-endian — higher quality, louder
+        this.format = new AudioFormat(44100f, 16, 1, true, false);
     }
 
     public void startRecording() throws LineUnavailableException {
@@ -58,6 +58,7 @@ public class VoiceHandler {
 
     /**
      * Stop recording and return WAV-formatted bytes (with proper WAV header).
+     * Applies volume boost (2x amplification) to recorded audio.
      */
     public byte[] stopRecording() throws IOException {
         if (!recording) return new byte[0];
@@ -76,6 +77,10 @@ public class VoiceHandler {
         }
 
         byte[] pcm = rawOut.toByteArray();
+
+        // ═══════ AMPLIFY VOLUME (2x boost) ═══════
+        pcm = amplify(pcm, 2.0);
+
         ByteArrayInputStream bais = new ByteArrayInputStream(pcm);
         long frameCount = pcm.length / format.getFrameSize();
         AudioInputStream ais = new AudioInputStream(bais, format, frameCount);
@@ -87,7 +92,7 @@ public class VoiceHandler {
     }
 
     /**
-     * Play WAV bytes (expects a valid WAV stream). This method blocks while playback occurs.
+     * Play WAV bytes with maximum volume. This method blocks while playback occurs.
      */
     public void play(byte[] wavBytes) throws LineUnavailableException, IOException, UnsupportedAudioFileException {
         try (ByteArrayInputStream bais = new ByteArrayInputStream(wavBytes);
@@ -103,6 +108,13 @@ public class VoiceHandler {
             });
             try {
                 clip.open(ais);
+
+                // ═══════ SET VOLUME TO MAXIMUM ═══════
+                if (clip.isControlSupported(FloatControl.Type.MASTER_GAIN)) {
+                    FloatControl vol = (FloatControl) clip.getControl(FloatControl.Type.MASTER_GAIN);
+                    vol.setValue(vol.getMaximum()); // Max gain (typically +6dB)
+                }
+
                 clip.start();
                 done.await();
             } catch (InterruptedException e) {
@@ -112,7 +124,25 @@ public class VoiceHandler {
             }
         }
     }
+
+    /**
+     * Amplify PCM 16-bit audio data by a given factor.
+     * Clamps values to prevent clipping distortion.
+     */
+    private byte[] amplify(byte[] pcm, double factor) {
+        byte[] result = new byte[pcm.length];
+        for (int i = 0; i < pcm.length - 1; i += 2) {
+            // Read 16-bit sample (little-endian)
+            int sample = (pcm[i] & 0xFF) | (pcm[i + 1] << 8);
+            // Amplify
+            sample = (int) (sample * factor);
+            // Clamp to 16-bit range
+            if (sample > Short.MAX_VALUE) sample = Short.MAX_VALUE;
+            if (sample < Short.MIN_VALUE) sample = Short.MIN_VALUE;
+            // Write back (little-endian)
+            result[i] = (byte) (sample & 0xFF);
+            result[i + 1] = (byte) ((sample >> 8) & 0xFF);
+        }
+        return result;
+    }
 }
-
-
-
