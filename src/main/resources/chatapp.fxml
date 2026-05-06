@@ -73,6 +73,7 @@
                                     <Button fx:id="btnEncryptedImage" text="🔒" style="-fx-padding: 8; -fx-font-size: 14;"/>
                                     <Button fx:id="btnFile" text="📎" style="-fx-padding: 8; -fx-font-size: 14;"/>
                                     <Button fx:id="btnVoice" text="🎤" style="-fx-padding: 8; -fx-font-size: 14;"/>
+                                    <Button fx:id="btnVideoCall" text="📹" style="-fx-padding: 8; -fx-font-size: 14;"/>
                                     <Button fx:id="btnSpeechToText" text="🎙️→📝" style="-fx-padding: 8; -fx-font-size: 12;"/>
                                     <Button fx:id="btnStopSpeech" text="⏹️" style="-fx-padding: 8; -fx-font-size: 12;" disable="true"/>
                                     <Button fx:id="btnSend" text="📤 Gửi" style="-fx-padding: 8 20; -fx-font-size: 12;"/>
