@@ -69,6 +69,7 @@
                 <HBox spacing="10" prefHeight="40">
                             <TextField fx:id="txtMessage" promptText="Nhập tin nhắn..." HBox.hgrow="ALWAYS" style="-fx-padding: 8;"/>
                                     <Button fx:id="btnImage" text="🖼️" style="-fx-padding: 8; -fx-font-size: 14;"/>
+                                    <Button fx:id="btnEncryptedImage" text="🔒" style="-fx-padding: 8; -fx-font-size: 14;"/>
                                     <Button fx:id="btnFile" text="📎" style="-fx-padding: 8; -fx-font-size: 14;"/>
                                     <Button fx:id="btnSend" text="📤 Gửi" style="-fx-padding: 8 20; -fx-font-size: 12;"/>
                 </HBox>
