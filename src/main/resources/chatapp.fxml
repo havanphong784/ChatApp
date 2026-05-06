@@ -33,7 +33,7 @@
             </VBox>
 
             <Button fx:id="btnConnect" text="Kết Nối" style="-fx-padding: 10; -fx-font-size: 14;"/>
-            <Label fx:id="lblStatus" text="Chưa kết nối" style="-fx-text-fill: #999999;"/>
+            <Label fx:id="lblConnectStatus" text="Chưa kết nối" style="-fx-text-fill: #999999;"/>
         </VBox>
     </VBox>
 
@@ -42,7 +42,7 @@
         <top>
             <HBox spacing="10" style="-fx-padding: 10; -fx-background-color: #f0f0f0;" prefHeight="50">
                 <Label fx:id="lblClient" text="👤 User" style="-fx-font-size: 14; -fx-font-weight: bold;" HBox.hgrow="ALWAYS"/>
-                <Label fx:id="lblStatus" text="✅ Kết nối thành công" style="-fx-text-fill: #00aa00; -fx-font-weight: bold;"/>
+                <Label fx:id="lblChatStatus" text="✅ Kết nối thành công" style="-fx-text-fill: #00aa00; -fx-font-weight: bold;"/>
             </HBox>
         </top>
 
@@ -71,6 +71,7 @@
                                     <Button fx:id="btnImage" text="🖼️" style="-fx-padding: 8; -fx-font-size: 14;"/>
                                     <Button fx:id="btnEncryptedImage" text="🔒" style="-fx-padding: 8; -fx-font-size: 14;"/>
                                     <Button fx:id="btnFile" text="📎" style="-fx-padding: 8; -fx-font-size: 14;"/>
+                                    <Button fx:id="btnVoice" text="🎤" style="-fx-padding: 8; -fx-font-size: 14;"/>
                                     <Button fx:id="btnSend" text="📤 Gửi" style="-fx-padding: 8 20; -fx-font-size: 12;"/>
                 </HBox>
             </VBox>
